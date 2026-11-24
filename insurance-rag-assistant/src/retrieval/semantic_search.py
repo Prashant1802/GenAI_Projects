@@ -35,27 +35,49 @@ def load_resources():
     return index, metadata, model
 
 
-def semantic_search(query, index, metadata, model, top_k=TOP_K):
-    """Find the most relevant document chunks for a query."""
+def expand_chunk_context(metadata, matched_index, window=1):
+    """Retrieve neighboring chunks from the same page."""
 
-    # Step 1: Convert the question into an embedding
+    matched_chunk = metadata[matched_index]
+    matched_pages = set(matched_chunk["page_numbers"])
+
+    start = max(0, matched_index - window)
+    end = min(len(metadata), matched_index + window + 1)
+
+    context_parts = []
+    context_chunk_ids = []
+
+    for idx in range(start, end):
+
+        chunk = metadata[idx]
+
+        # Only include chunks from the same page.
+        if not matched_pages.intersection(chunk["page_numbers"]):
+            continue
+
+        context_parts.append(chunk["text"])
+        context_chunk_ids.append(chunk["chunk_id"])
+
+    return {
+        "context_text": "\n\n".join(context_parts),
+        "context_chunk_ids": context_chunk_ids
+    }
+
+
+def semantic_search(query, index, metadata, model, top_k=TOP_K):
+
     query_embedding = model.encode(
         [query],
         convert_to_numpy=True,
         normalize_embeddings=True
     )
 
-    # Step 2: Convert embedding to FAISS-compatible format
     query_embedding = query_embedding.astype("float32")
 
-    # Step 3: Search the FAISS index
     top_k = min(top_k, index.ntotal)
-    # scores contains similarity scores.
-    # indices contains the positions of matching vectors in FAISS.
-    #top_k=3 means retrieve the three closest matches.
+
     scores, indices = index.search(query_embedding, top_k)
 
-    # Step 4: Display matching chunks
     results = []
 
     for score, idx in zip(scores[0], indices[0]):
@@ -63,18 +85,21 @@ def semantic_search(query, index, metadata, model, top_k=TOP_K):
         if idx == -1:
             continue
 
-        # The returned index position maps to the corresponding metadata record because we 
-        # inserted the embeddings and metadata in the same order.
         chunk = metadata[idx]
 
-        result = {
+        expanded_context = expand_chunk_context(
+            metadata,
+            matched_index=int(idx),
+            window=1
+        )
+
+        results.append({
             "chunk_id": chunk["chunk_id"],
             "similarity_score": float(score),
             "page_numbers": chunk["page_numbers"],
-            "text": chunk["text"]
-        }
-
-        results.append(result)
+            "context_chunk_ids": expanded_context["context_chunk_ids"],
+            "text": expanded_context["context_text"]
+        })
 
     return results
 
@@ -111,9 +136,10 @@ if __name__ == "__main__":
         for rank, result in enumerate(results, start=1):
 
             print(f"\nRank: {rank}")
-            print(f"Chunk ID: {result['chunk_id']}")
+            print(f"Matched Chunk ID: {result['chunk_id']}")
+            print(f"Context Chunk IDs: {result['context_chunk_ids']}")
             print(f"Similarity Score: {result['similarity_score']:.4f}")
             print(f"Page Numbers: {result['page_numbers']}")
             print("\nChunk Text:")
-            print(result["text"][:1000])
+            print(result["text"])
             print("-" * 70)
