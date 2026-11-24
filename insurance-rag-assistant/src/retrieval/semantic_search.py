@@ -35,8 +35,27 @@ def load_resources():
     return index, metadata, model
 
 
+def merge_overlapping_text(existing_text, next_text):
+    """Merge two chunks while removing exact overlapping text."""
+    """ identifies matching text between two chunks. """
+    """It checks for exact overlap, starting with the longest possible match (up to 1,000 characters).
+        If it finds at least 50 matching characters, it removes the duplicate portion.
+        If no overlap is found, it joins both chunks with a separator."""
+    
+    max_overlap = min(len(existing_text), len(next_text), 1000)
+    min_overlap = 50
+
+    for overlap in range(max_overlap, min_overlap - 1, -1):
+        if existing_text[-overlap:] == next_text[:overlap]:
+            return existing_text + next_text[overlap:]
+
+    # If no exact overlap is found, keep both chunks.
+    return existing_text + "\n\n" + next_text
+
+
 def expand_chunk_context(metadata, matched_index, window=1):
-    """Retrieve neighboring chunks from the same page."""
+    """Retrieve neighboring chunks and merge overlapping text."""
+    """uses above merging function instead of directly joining chunks."""
 
     matched_chunk = metadata[matched_index]
     matched_pages = set(matched_chunk["page_numbers"])
@@ -44,22 +63,29 @@ def expand_chunk_context(metadata, matched_index, window=1):
     start = max(0, matched_index - window)
     end = min(len(metadata), matched_index + window + 1)
 
-    context_parts = []
+    context_text = ""
     context_chunk_ids = []
 
     for idx in range(start, end):
 
         chunk = metadata[idx]
 
-        # Only include chunks from the same page.
+        # Only retrieve chunks from the same page.
         if not matched_pages.intersection(chunk["page_numbers"]):
             continue
 
-        context_parts.append(chunk["text"])
+        if not context_text:
+            context_text = chunk["text"]
+        else:
+            context_text = merge_overlapping_text(
+                context_text,
+                chunk["text"]
+            )
+
         context_chunk_ids.append(chunk["chunk_id"])
 
     return {
-        "context_text": "\n\n".join(context_parts),
+        "context_text": context_text,
         "context_chunk_ids": context_chunk_ids
     }
 
